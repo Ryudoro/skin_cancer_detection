@@ -8,10 +8,10 @@ pytorch_dataset = factory.get_dataset('train', None, framework='torch')
 
 tf_dataset = factory.get_dataset('train', None, framework='tensorflow')
 
-tf_model = ModelFactory().get_model('PretrainedSkinLesionClassifier', num_classes=7, framework='tensorflow')
+tf_model = ModelFactory().get_model('PretrainedVisionTransformerSkinLesionClassifier', num_classes=7, framework='tensorflow')
 
 optimizer = tf.keras.optimizers.Adam()
 
 tf_monitor = TrainingMonitor()
 tf_training_strategy = TFTrainingStrategy()
-tf_training_strategy.execute(tf_model, tf_dataset, optimizer, tf_monitor, num_epochs=10)
+tf_training_strategy.execute(tf_model, tf_dataset, optimizer, tf_monitor, num_epochs=10, save = True)

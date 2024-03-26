@@ -24,7 +24,7 @@ class Strategy(ABC):
 
 
 class TrainingStrategy(Strategy):
-    def execute(self, model, dataloader, criterion, optimizer, monitor, num_epochs=10):
+    def execute(self, model, dataloader, criterion, optimizer, monitor, num_epochs=10, save  = False):
         for epoch in range(num_epochs):
             print(f"Starting epoch {epoch+1}/{num_epochs}")
             running_loss = 0.0
@@ -47,7 +47,8 @@ class TrainingStrategy(Strategy):
             epoch_loss = running_loss / len(dataloader)
             epoch_accuracy = (correct_predictions / total_predictions) * 100
             monitor.notify_all(epoch, {"loss": epoch_loss, "accuracy": epoch_accuracy})
-
+        if save:
+            model.save("model_result")
 class EvaluationStrategy(Strategy):
     def execute(self, model, dataloader, **kwargs):
         model.eval()
@@ -67,7 +68,7 @@ class EvaluationStrategy(Strategy):
 import tensorflow as tf
 
 class TFTrainingStrategy(Strategy):
-    def execute(self, model, dataset, optimizer, monitor, num_epochs=10):
+    def execute(self, model, dataset, optimizer, monitor, num_epochs=10, save  = False):
         loss_metric = tf.keras.metrics.Mean()
         accuracy_metric = tf.keras.metrics.CategoricalAccuracy()
         
@@ -92,6 +93,8 @@ class TFTrainingStrategy(Strategy):
             monitor.notify_all(epoch, {"loss": loss_metric.result().numpy(), "accuracy": accuracy_metric.result().numpy() * 100})
             loss_metric.reset_states()
             accuracy_metric.reset_states()
+        if save:
+            model.save("model_result_tf")
             
 class TFEvaluationStrategy(Strategy):
     def execute(self, model, dataset, **kwargs):

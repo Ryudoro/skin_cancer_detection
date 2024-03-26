@@ -4,6 +4,7 @@ import torch
 import tensorflow as tf
 from tensorflow.keras.applications import MobileNetV2,EfficientNetB0
 from tensorflow.keras.layers import GlobalAveragePooling2D, Dense
+import tensorflow_hub as hub
 
 def conv_output_size(input_size, kernel_size, padding, stride):
     return (input_size - kernel_size + 2*padding) // stride + 1
@@ -89,6 +90,24 @@ class PretrainedEfficientSkinLesionClassifier(tf.keras.Model):
         x = self.fc2(x)
         return x
     
+
+class PretrainedVisionTransformerSkinLesionClassifier(tf.keras.Model):
+    def __init__(self, num_classes):
+        super(PretrainedVisionTransformerSkinLesionClassifier, self).__init__()
+        self.vit_model = hub.KerasLayer("https://tfhub.dev/google/vit-base/patch16-224-in21k/1",
+                                        trainable=False)
+        
+        self.global_average_pooling = GlobalAveragePooling2D()
+        self.fc1 = Dense(512, activation='relu')
+        self.fc2 = Dense(num_classes, activation='softmax')
+
+    def call(self, inputs):
+        x = self.vit_model(inputs)
+        x = self.global_average_pooling(x)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        return x
+    
 class ModelFactory:
     def get_model(self, model_name, num_classes, framework='torch'):
         if framework == 'torch':
@@ -101,6 +120,8 @@ class ModelFactory:
                 return PretrainedSkinLesionClassifier(num_classes)
             if model_name == "PretrainedEfficientSkinLesionClassifier":
                     return PretrainedEfficientSkinLesionClassifier(num_classes)
+            if model_name == "PretrainedVisionTransformerSkinLesionClassifier":
+                return PretrainedVisionTransformerSkinLesionClassifier(num_classes)
         else:
             raise ValueError("Unsupported framework: {}".format(framework))
         
