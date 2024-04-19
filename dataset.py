@@ -6,6 +6,7 @@ import pandas as pd
 import os
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from sklearn.preprocessing import LabelEncoder
 import numpy as np
 
 class SkinLesionDataset(Dataset):
@@ -57,13 +58,14 @@ class TFSkinLesionDataset:
             img = self.transform(img)
 
         img /= 255.0
-        
+        if self.augmentation:
+            img = self.augmentation(img)
         return img, label
 
-    def get_dataset(self, dataset_type):
+    def get_dataset(self, dataset_type, augmentation = None):
         train_df, val_df = train_test_split(self.metadata, test_size=0.2)
         df_selected = train_df if dataset_type == "train" else val_df
-
+        self.augmentation = augmentation
         paths = df_selected['path'].values
         labels = [self.label_to_index[label] for label in df_selected['dx'].values]
         labels = tf.keras.utils.to_categorical(labels, num_classes=len(self.label_to_index))
@@ -73,13 +75,75 @@ class TFSkinLesionDataset:
 
         return dataset.batch(32)
     
+
+class DualInputSkinLesionDataset:
+    def __init__(self, metadata, img_dir_1, img_dir_2, transform=None):
+        self.img_dir_1 = img_dir_1
+        self.img_dir_2 = img_dir_2
+        self.transform = transform
+        self.metadata = metadata
+        self.metadata['path'] = self.metadata['image_id'].apply(self.find_image_path)
+        self.label_to_index = {label: index for index, label in enumerate(self.metadata['dx'].unique())}
+        self.sex_encoder = LabelEncoder()
+        self.localization_encoder = LabelEncoder()
+        self._prepare_encoders()
+
+    def _prepare_encoders(self):
+        # Fit label encoders
+        self.sex_encoder.fit(self.metadata['sex'])
+        self.localization_encoder.fit(self.metadata['localization'])
+
+    def find_image_path(self, image_id):
+        path_1 = os.path.join(self.img_dir_1, image_id + ".jpg")
+        path_2 = os.path.join(self.img_dir_2, image_id + ".jpg")
+        if os.path.exists(path_1):
+            return path_1
+        elif os.path.exists(path_2):
+            return path_2
+        else:
+            return None
+
+    def load_and_preprocess_image(self, path, metadata, label):
+        img = tf.io.read_file(path)
+        img = tf.image.decode_jpeg(img, channels=3)
+        img = tf.image.resize(img, [150, 150])
+        if self.transform:
+            img = self.transform(img)
+        
+        img /= 255.0
+        if self.augmentations:
+            img = self.augmentations(img)
+        return img, metadata,label
+
+    def get_dataset(self, dataset_type, augmentation = None):
+        train_df, val_df = train_test_split(self.metadata, test_size=0.2)
+        df_selected = train_df if dataset_type == "train" else val_df
+        self.augmentations = augmentation
+
+        paths = df_selected['path'].values
+        ages = df_selected['age'].values.astype(np.float32) 
+        sexes = self.sex_encoder.transform(df_selected['sex']).astype(np.float32)
+        localizations = self.localization_encoder.transform(df_selected['localization']).astype(np.float32)
+        metadata = np.stack([ages, sexes, localizations], axis=1) 
+        labels = [self.label_to_index[label] for label in df_selected['dx'].values]
+        labels = tf.keras.utils.to_categorical(labels, num_classes=len(self.label_to_index))
+
+        dataset = tf.data.Dataset.from_tensor_slices((paths, metadata, labels))
+        dataset = dataset.map(lambda path, metadata, label: tf.py_function(
+            func=self.load_and_preprocess_image, inp=[path, metadata, label], Tout=[tf.float32, tf.float32, tf.float32]), 
+            num_parallel_calls=tf.data.AUTOTUNE)
+
+        return dataset.batch(32)
+    
 class DatasetFactory:
     def __init__(self, csv_file, img_dir_1, img_dir_2):
         self.img_dir_1 = img_dir_1
         self.img_dir_2 = img_dir_2
         self.metadata = pd.read_csv(csv_file)
+        self.metadata = self.metadata.dropna()
         self.metadata['path'] = self.metadata['image_id'].apply(self.find_image_path)
         self.label_to_index = {label: idx for idx, label in enumerate(self.metadata['dx'].unique())}
+        
 
     def find_image_path(self, image_id):
         path_1 = os.path.join(self.img_dir_1, image_id + ".jpg")
@@ -98,7 +162,7 @@ class DatasetFactory:
         img /= 255.0
         return img
 
-    def get_dataset(self, dataset_type, transforms=None, framework="torch"):
+    def get_dataset(self, dataset_type, transforms=None, framework="torch", dataset_class="dual_input", augmentation = None):
         train_df, val_df = train_test_split(self.metadata, test_size=0.2)
         df = train_df if dataset_type == "train" else val_df
         
@@ -106,10 +170,31 @@ class DatasetFactory:
             dataset = SkinLesionDataset(dataframe=df, transform=transforms)
             return dataset
         elif framework == "tensorflow":
+            if dataset_class == "dual_input":
+                dual_input_dataset = DualInputSkinLesionDataset(self.metadata, self.img_dir_1, self.img_dir_2, transform=transforms)
+                return dual_input_dataset.get_dataset(dataset_type, augmentation)
             tf_dataset = TFSkinLesionDataset(self.metadata, self.img_dir_1, self.img_dir_2, transform=transforms)
-            return tf_dataset.get_dataset(dataset_type)
+            return tf_dataset.get_dataset(dataset_type, augmentation)
         else:
             raise ValueError(f"Unsupported framework: {framework}")
+        
+    def get_train_test_datasets(self, test_size=0.2, transforms=None, framework="tensorflow", dataset_class="dual_input"):
+        train_df, test_df = train_test_split(self.metadata, test_size=test_size)
+        
+        if framework == "torch":
+            train_dataset = SkinLesionDataset(dataframe=train_df, transform=transforms)
+            test_dataset = SkinLesionDataset(dataframe=test_df, transform=transforms)
+        elif framework == "tensorflow":
+            if dataset_class == "dual_input":
+                train_dataset = DualInputSkinLesionDataset(train_df, self.img_dir_1, self.img_dir_2, transform=transforms)
+                test_dataset = DualInputSkinLesionDataset(test_df, self.img_dir_1, self.img_dir_2, transform=transforms)
+            else:
+                train_dataset = TFSkinLesionDataset(train_df, self.img_dir_1, self.img_dir_2, transform=transforms)
+                test_dataset = TFSkinLesionDataset(test_df, self.img_dir_1, self.img_dir_2, transform=transforms)
+        else:
+            raise ValueError(f"Unsupported framework: {framework}")
+        
+        return train_dataset, test_dataset
 
 
 
